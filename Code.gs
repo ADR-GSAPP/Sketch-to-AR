@@ -1,30 +1,10 @@
-/**
- * SKETCH-TO-AR — Google Apps Script back end
- * ------------------------------------------------------------
- * Stores uploaded .glb files in a Google Drive folder and logs
- * every upload / edit / delete in this Google Sheet.
- *
- * ONE-TIME SETUP (see the guide for screenshots-level detail):
- *   1. Create a new Google Sheet. Extensions > Apps Script.
- *   2. Delete the sample code, paste this whole file, Save.
- *   3. Pick "setup" in the function menu, click Run, approve access.
- *   4. Deploy > New deployment > type "Web app"
- *        Execute as: Me      Who has access: Anyone
- *      Click Deploy and copy the Web app URL.
- *   5. Paste that URL into API_URL at the top of index.html.
- *
- * Themes: edit the "Themes" tab of the Sheet (one per row).
- * No code change needed.
- */
-
-const FOLDER_NAME = 'Sketch-to-AR uploads';
+const FOLDER_NAME = 'star glb uploads';
 const MAX_MB = 25;
 
 const COLS = ['ID', 'Uploaded', 'Student', 'Theme', 'Project', 'Size (MB)',
-              'Status', 'Last change', 'File ID', 'Thumbnail'];
+              'Status', 'Last change', 'File ID', 'Thumbnail', 'Site'];
 const C = {}; COLS.forEach((n, i) => C[n] = i);
 
-// ---------- setup ----------
 function setup() {
   const ss = SpreadsheetApp.getActive();
   let log = ss.getSheetByName('Uploads');
@@ -48,15 +28,11 @@ function setup() {
 }
 
 function getFolder_() {
-  const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('FOLDER_ID');
-  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
-  const f = DriveApp.createFolder(FOLDER_NAME);
-  props.setProperty('FOLDER_ID', f.getId());
-  return f;
+  const it = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (!it.hasNext()) throw new Error('Drive folder "' + FOLDER_NAME + '" not found');
+  return it.next();
 }
 
-// ---------- HTTP ----------
 function doGet(e) {
   try {
     const a = e.parameter.action;
@@ -85,8 +61,11 @@ function out_(o) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ---------- helpers ----------
 function log_() { return SpreadsheetApp.getActive().getSheetByName('Uploads'); }
+function ensureHeaders_() {
+  const sh = log_(), cell = sh.getRange(1, C['Site'] + 1);
+  if (!cell.getValue()) cell.setValue('Site').setFontWeight('bold');
+}
 function clean_(s, max) { return String(s || '').trim().replace(/\s+/g, ' ').slice(0, max || 80); }
 function same_(a, b) { return clean_(a).toLowerCase() === clean_(b).toLowerCase(); }
 
@@ -118,14 +97,14 @@ function item_(r) {
     theme: r[C['Theme']],
     project: r[C['Project']],
     sizeMB: r[C['Size (MB)']],
-    thumb: r[C['Thumbnail']]
+    thumb: r[C['Thumbnail']],
+    site: r[C['Site']] || ''
   };
 }
 
-// ---------- actions ----------
 function list_() {
   const items = rows_().filter(x => x.r[C['Status']] !== 'Deleted')
-    .map(x => item_(x.r)).reverse();               // newest first
+    .map(x => item_(x.r)).reverse();
   return { themes: themes_(), items: items };
 }
 
@@ -137,12 +116,12 @@ function file_(id) {
 
 function upload_(b) {
   const student = clean_(b.student), theme = clean_(b.theme), project = clean_(b.project);
+  const site = clean_(b.site);
   if (!student || !theme || !project) throw new Error('Name, theme and project name are all required');
   if (!b.data) throw new Error('No file received');
   const bytes = Utilities.base64Decode(b.data);
   const mb = bytes.length / 1048576;
   if (mb > MAX_MB) throw new Error('File is over ' + MAX_MB + ' MB');
-  // GLB files start with the ASCII bytes "glTF"
   if (!(bytes[0] === 0x67 && bytes[1] === 0x6C && bytes[2] === 0x54 && bytes[3] === 0x46))
     throw new Error('That is not a .glb file');
 
@@ -158,7 +137,8 @@ function upload_(b) {
   row[C['Theme']] = theme; row[C['Project']] = project;
   row[C['Size (MB)']] = Math.round(mb * 100) / 100; row[C['Status']] = 'Live';
   row[C['Last change']] = 'Uploaded ' + now.toLocaleString(); row[C['File ID']] = file.getId();
-  row[C['Thumbnail']] = thumb;
+  row[C['Thumbnail']] = thumb; row[C['Site']] = site;
+  ensureHeaders_();
   log_().appendRow(row);
   return { ok: true, item: item_(row) };
 }
@@ -166,15 +146,17 @@ function upload_(b) {
 function update_(b) {
   const hit = find_(b.id);
   if (!same_(hit.r[C['Student']], b.student)) throw new Error('This sketch belongs to another name');
-  const project = clean_(b.project), theme = clean_(b.theme);
+  const project = clean_(b.project), theme = clean_(b.theme), site = clean_(b.site);
   if (!project || !theme) throw new Error('Project name and theme are required');
+  ensureHeaders_();
   const sh = log_();
   sh.getRange(hit.row, C['Theme'] + 1).setValue(theme);
   sh.getRange(hit.row, C['Project'] + 1).setValue(project);
+  sh.getRange(hit.row, C['Site'] + 1).setValue(site);
   sh.getRange(hit.row, C['Last change'] + 1).setValue('Edited ' + new Date().toLocaleString());
   try { DriveApp.getFileById(hit.r[C['File ID']])
           .setName((clean_(b.student) + ' - ' + project).replace(/[\\/:*?"<>|]/g, '') + ' (' + b.id + ').glb'); } catch (e) {}
-  hit.r[C['Theme']] = theme; hit.r[C['Project']] = project;
+  hit.r[C['Theme']] = theme; hit.r[C['Project']] = project; hit.r[C['Site']] = site;
   return { ok: true, item: item_(hit.r) };
 }
 
